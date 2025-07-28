@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Pong – Choix & Match en 5 Points</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { background:#222; color:#fff; font-family:sans-serif; overflow:hidden; }
+    #menu {
+      position:absolute; top:0; left:0; width:100%; height:100%;
+      background:rgba(0,0,0,0.9); display:flex; align-items:center;
+      justify-content:center; flex-direction:column; z-index:10;
+    }
+    #menu h1 { font-size:48px; margin-bottom:10px; }
+    #menu p { font-size:20px; margin-bottom:10px; }
+    .choices {
+      display:flex; gap:40px; margin-bottom:10px;
+    }
+    .card {
+      cursor:pointer; text-align:center;
+      border:2px solid transparent; padding:8px; border-radius:8px;
+      transition: border-color .2s;
+    }
+    .card.selected { border-color:#f90; }
+    .card.blocked  { opacity:0.3; pointer-events:none; }
+    .card img      { display:block; width:100px; height:100px; object-fit:cover; }
+    .card span     { display:block; margin-top:8px; }
+    .controls {
+      display:flex; width:400px; justify-content:space-between;
+      margin-bottom:20px;
+    }
+    .controls div {
+      font-size:18px; text-align:center;
+    }
+    #startBtn {
+      padding:10px 20px; font-size:18px; cursor:pointer;
+      background:#f90; border:none; border-radius:4px;
+      opacity:0.5;
+    }
+    #startBtn.enabled { opacity:1; }
+    #score {
+      position:absolute; top:10px; width:100%; text-align:center;
+      font-size:28px; z-index:5;
+    }
+    #gameCanvas { display:block; margin:0 auto; background:#004; }
+  </style>
+</head>
+<body>
+
+  <div id="menu">
+    <h1>Choisissez vos personnages</h1>
+    <p>Match en 5 points — Premier à 5 gagne</p>
+    <div class="choices">
+      <div id="p1Choices"></div>
+      <div id="p2Choices"></div>
+    </div>
+    <div class="controls">
+      <div>
+        <strong>Joueur 1 (WASD)</strong><br>
+        W ↑<br>A ←<br>S ↓<br>D →
+      </div>
+      <div>
+        <strong>Joueur 2 (Flèches)</strong><br>
+        ↑<br>←<br>↓<br>→
+      </div>
+    </div>
+    <button id="startBtn">Démarrer le jeu</button>
+  </div>
+
+  <div id="score"></div>
+  <canvas id="gameCanvas" width="1200" height="600"></canvas>
+
+  <script>
+    // --- 1) On ajoute Hugo et Matthis ---
+    const names = ['Lucas','Camille','Richard','Dorian','Armand','Hugo','Matthis'];
+
+    // --- 2) Préchargement de toutes les images (y compris Hugo et Matthis) ---
+    const images = {};
+    names.concat(['Alan','Jocelyn']).forEach(n => {
+      images[n] = new Image();
+      images[n].src = `${n}.png`;
+    });
+
+    // --- Création des cartes (inchangé) ---
+    function createCard(name) {
+      const div = document.createElement('div');
+      div.className = 'card';
+      div.dataset.name = name;
+      const img = images[name].cloneNode();
+      const span = document.createElement('span');
+      span.textContent = name;
+      div.append(img, span);
+      return div;
+    }
+
+    const p1Choices = document.getElementById('p1Choices');
+    const p2Choices = document.getElementById('p2Choices');
+    names.forEach(n => {
+      p1Choices.append(createCard(n));
+      p2Choices.append(createCard(n));
+    });
+
+    // --- Reste du code inchangé pour sélection, menu, et jeu ---
+    let sel1 = null, sel2 = null;
+    const startBtn = document.getElementById('startBtn');
+    function updateStartButton() {
+      if (sel1 && sel2 && sel1 !== sel2) startBtn.classList.add('enabled');
+      else startBtn.classList.remove('enabled');
+    }
+    function setupSelection(container, isP1) {
+      container.addEventListener('click', e => {
+        const card = e.target.closest('.card');
+        if (!card) return;
+        const name = card.dataset.name;
+        container.querySelectorAll('.card').forEach(c=>c.classList.remove('selected'));
+        card.classList.add('selected');
+        if (isP1) sel1 = name; else sel2 = name;
+        [p1Choices,p2Choices].forEach((col,i)=>{
+          col.querySelectorAll('.card').forEach(c=>{
+            c.classList.remove('blocked');
+            if ((i===0 && c.dataset.name===sel2) || (i===1 && c.dataset.name===sel1))
+              c.classList.add('blocked');
+          });
+        });
+        updateStartButton();
+      });
+    }
+    setupSelection(p1Choices, true);
+    setupSelection(p2Choices, false);
+    startBtn.addEventListener('click', ()=>{
+      if (!(sel1&&sel2&&sel1!==sel2)) return;
+      document.getElementById('menu').style.display='none';
+      initGame(sel1, sel2);
+    });
+
+    // --- Variables du jeu et classes (identiques à ton code existant) ---
+    const canvas = document.getElementById('gameCanvas');
+    const ctx    = canvas.getContext('2d');
+    const scoreDiv = document.getElementById('score');
+    const maxPoints = 5;
+    let p1,p2,ball,obstacles,score,displayNames,loopId;
+
+    class Paddle {
+      constructor(img,x,y,keys){
+        this.img=img; this.x=x; this.y=y;
+        this.w=64; this.h=192; this.speed=6;
+        this.keys=keys; this.move={up:false,down:false,left:false,right:false};
+      }
+      update(){
+        if(this.move.up) this.y-=this.speed;
+        if(this.move.down) this.y+=this.speed;
+        if(this.move.left) this.x-=this.speed;
+        if(this.move.right) this.x+=this.speed;
+        this.x=Math.max(0,Math.min(canvas.width-this.w,this.x));
+        this.y=Math.max(0,Math.min(canvas.height-this.h,this.y));
+      }
+      draw(){ ctx.drawImage(this.img,this.x,this.y,this.w,this.h); }
+    }
+
+    class Ball {
+      constructor(){
+        this.r=12; this.speed=8; this.reset();
+      }
+      reset(winner){
+        this.x=canvas.width/2; this.y=canvas.height/2;
+        const ang=(Math.random()*60-30)*Math.PI/180;
+        const dir=winner==='p1'?1:winner==='p2'?-1:(Math.random()<.5?1:-1);
+        this.vx=this.speed*Math.cos(ang)*dir;
+        this.vy=this.speed*Math.sin(ang);
+      }
+      update(p1,p2,obs){
+        this.x+= this.vx; this.y+= this.vy;
+        if(this.y<=this.r){ this.y=this.r; this.vy*=-1; }
+        if(this.y>=canvas.height-this.r){ this.y=canvas.height-this.r; this.vy*=-1;}
+        [p1,p2].forEach(p=>{
+          if(this.x-this.r<p.x+p.w && this.x+this.r>p.x &&
+             this.y-this.r<p.y+p.h && this.y+this.r>p.y){
+            this.vx*=-1;
+            if(this.vx>0) this.x=p.x+p.w+this.r; else this.x=p.x-this.r;
+            const d=(this.y-(p.y+p.h/2))/(p.h/2);
+            this.vy=this.speed*d;
+          }
+        });
+        obs.forEach(o=>{
+          o.x+=o.vx; o.y+=o.vy;
+          if(o.x<0||o.x+o.w>canvas.width) o.vx*=-1;
+          if(o.y<0||o.y+o.h>canvas.height) o.vy*=-1;
+          if(this.x-this.r<o.x+o.w && this.x+this.r>o.x &&
+             this.y-this.r<o.y+o.h && this.y+this.r>o.y){
+            const ox=Math.min(this.x+this.r-o.x, o.x+o.w-(this.x-this.r));
+            const oy=Math.min(this.y+this.r-o.y, o.y+o.h-(this.y-this.r));
+            if(ox<oy) this.vx*=-1; else this.vy*=-1;
+          }
+        });
+      }
+      draw(){
+        ctx.fillStyle='#fff';
+        ctx.beginPath(); ctx.arc(this.x,this.y,this.r,0,2*Math.PI); ctx.fill();
+      }
+    }
+
+    // Arbitres & insultes
+    const insults = [
+      "Retourne faire des cases, bouffon !",
+      "Bam, un bad de plus !",
+      "Je vais te report à Laurine !",
+      "Comment t'as pu passer ta proba toi ?"
+    ];
+    let refTimer=0, refImg=null, refText="";
+    function showRef(w){
+      refImg = w==='p2'? images['Alan'] : images['Jocelyn'];
+      refText = insults[Math.floor(Math.random()*insults.length)];
+      refTimer = 100;
+    }
+    function drawRef(){
+      if(!refTimer) return;
+      const iw=160, ih=160;
+      const x=(canvas.width-iw)/2, y=canvas.height-ih-10;
+      ctx.drawImage(refImg,x,y,iw,ih);
+      ctx.font="20px sans-serif"; ctx.fillStyle="#f00";
+      ctx.fillText(refText,(canvas.width-ctx.measureText(refText).width)/2,y-10);
+      refTimer--;
+    }
+
+    function updateScore(){
+      scoreDiv.textContent =
+        `${displayNames.p1} ${score.p1} – ${score.p2} ${displayNames.p2}`;
+      if(score.p1===maxPoints||score.p2===maxPoints){
+        cancelAnimationFrame(loopId);
+        const winner = score.p1===maxPoints?displayNames.p1:displayNames.p2;
+        setTimeout(()=>alert(`${winner} a gagné le match !`),100);
+      }
+    }
+
+    function initGame(name1,name2){
+      displayNames={p1:name1,p2:name2};
+      score={p1:0,p2:0};
+      updateScore();
+      p1=new Paddle(images[name1],50,canvas.height/2-96,
+        {up:'KeyW',down:'KeyS',left:'KeyA',right:'KeyD'});
+      p2=new Paddle(images[name2],canvas.width-114,canvas.height/2-96,
+        {up:'ArrowUp',down:'ArrowDown',left:'ArrowLeft',right:'ArrowRight'});
+
+      const rem=names.filter(n=>n!==name1&&n!==name2);
+      obstacles=rem.map((n,i)=>({
+        img:images[n],
+        x:200+i*160,
+        y:Math.random()*400+50,
+        w:64,h:64,
+        vx:(Math.random()*2+1)*(Math.random()<.5?-1:1),
+        vy:(Math.random()*2+1)*(Math.random()<.5?-1:1),
+      }));
+
+      ball=new Ball();
+      window.addEventListener('keydown',onKey);
+      window.addEventListener('keyup',onKeyUp);
+      loopId=requestAnimationFrame(gameLoop);
+    }
+
+    function onKey(e){
+      [p1,p2].forEach(p=>{
+        if(e.code===p.keys.up)    p.move.up=true;
+        if(e.code===p.keys.down)  p.move.down=true;
+        if(e.code===p.keys.left)  p.move.left=true;
+        if(e.code===p.keys.right) p.move.right=true;
+      });
+    }
+    function onKeyUp(e){
+      [p1,p2].forEach(p=>{
+        if(e.code===p.keys.up)    p.move.up=false;
+        if(e.code===p.keys.down)  p.move.down=false;
+        if(e.code===p.keys.left)  p.move.left=false;
+        if(e.code===p.keys.right) p.move.right=false;
+      });
+    }
+
+    function gameLoop(){
+      p1.update(); p2.update();
+      ball.update(p1,p2,obstacles);
+
+      if(ball.x-ball.r<0){
+        score.p2++; updateScore(); showRef('p2'); ball.reset('p2');
+      }
+      if(ball.x+ball.r>canvas.width){
+        score.p1++; updateScore(); showRef('p1'); ball.reset('p1');
+      }
+
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      obstacles.forEach(o=>ctx.drawImage(o.img,o.x,o.y,o.w,o.h));
+      ball.draw(); p1.draw(); p2.draw(); drawRef();
+
+      loopId=requestAnimationFrame(gameLoop);
+    }
+  </script>
+</body>
+</html>
+
+
+
+
+
+
+
+
+
+
